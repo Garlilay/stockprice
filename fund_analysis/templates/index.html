@@ -67,15 +67,17 @@
   .tabs {
     display: flex;
     border-bottom: 1px solid var(--border);
+    overflow-x: auto;
   }
 
   .tab {
     flex: 1;
-    padding: 10px 0;
+    padding: 10px 4px;
     text-align: center;
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
+    white-space: nowrap;
     transition: color .2s, border-bottom .2s;
     border-bottom: 2px solid transparent;
   }
@@ -83,6 +85,88 @@
   .tab.active {
     color: var(--accent2);
     border-bottom-color: var(--accent2);
+  }
+
+  /* ── Job progress ── */
+  .job-log {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    max-height: 120px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+
+  .job-log .log-line { color: var(--text-muted); }
+  .job-log .log-ok   { color: var(--ok); }
+  .job-log .log-err  { color: var(--danger); }
+
+  /* ── Path result ── */
+  .path-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .path-hop {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .path-node {
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .path-node.highlight { border-color: #f39c12; background: rgba(243,156,18,.1); }
+  .path-node .node-addr { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .path-node .node-label { color: var(--text-muted); font-size: 9px; }
+
+  .path-arrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    font-size: 9px;
+    color: var(--text-muted);
+  }
+
+  .path-arrow .arrow-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .path-arrow .tx-val { color: var(--ok); }
+
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent2);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   /* Tab content */
@@ -401,6 +485,8 @@
     <div class="tab active" data-tab="persons">人员</div>
     <div class="tab" data-tab="add-person">添加</div>
     <div class="tab" data-tab="add-rel">关系</div>
+    <div class="tab" data-tab="analysis">图谱分析</div>
+    <div class="tab" data-tab="settings">设置</div>
   </div>
 
   <!-- Persons Tab -->
@@ -477,6 +563,120 @@
       <input type="text" id="a-label" placeholder="冷钱包 / 交易所充值…">
     </div>
     <button class="btn btn-primary" id="btn-create-person">添加人员</button>
+  </div>
+
+  <!-- Analysis Tab -->
+  <div class="tab-panel" id="tab-analysis">
+
+    <!-- Mode selector -->
+    <div class="tabs" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;flex-shrink:0">
+      <div class="tab active" id="mode-path-tab" onclick="switchMode('path')" style="flex:none;padding:8px 10px">路径追踪</div>
+      <div class="tab" id="mode-batch-tab" onclick="switchMode('batch')" style="flex:none;padding:8px 10px">批量分析</div>
+    </div>
+
+    <!-- Path mode -->
+    <div id="mode-path">
+      <div class="section-title">两地址关联路径</div>
+      <div class="form-group">
+        <label>地址 A（起点）</label>
+        <input type="text" id="path-addr-a" placeholder="0x… 或 TRX 地址">
+      </div>
+      <div class="form-group">
+        <label>地址 B（终点）</label>
+        <input type="text" id="path-addr-b" placeholder="0x… 或 TRX 地址">
+      </div>
+      <div class="row">
+        <div class="form-group">
+          <label>链</label>
+          <select id="path-chain">
+            <option>ETH</option><option>BSC</option><option>ARB</option>
+            <option>OP</option><option>MATIC</option><option>TRON</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>最大跳数</label>
+          <select id="path-depth">
+            <option value="1">1 跳（直接）</option>
+            <option value="2" selected>2 跳</option>
+            <option value="3">3 跳</option>
+            <option value="4">4 跳（慢）</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-find-path" style="width:100%">开始追踪</button>
+    </div>
+
+    <!-- Batch mode -->
+    <div id="mode-batch" style="display:none">
+      <div class="section-title">多地址关系网络（最多10个）</div>
+      <div class="form-group">
+        <label>地址列表（每行一个）</label>
+        <textarea id="batch-addrs" rows="6" placeholder="0x1234…&#10;0x5678…&#10;TRx..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>链</label>
+        <select id="batch-chain">
+          <option>ETH</option><option>BSC</option><option>ARB</option>
+          <option>OP</option><option>MATIC</option><option>TRON</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="btn-batch-analyze" style="width:100%">批量分析</button>
+    </div>
+
+    <!-- Job status -->
+    <div id="analysis-status" style="display:none">
+      <div class="status-row">
+        <div class="spinner" id="analysis-spinner"></div>
+        <span id="analysis-status-text">初始化中…</span>
+        <button class="btn btn-ghost btn-sm" id="btn-stop-analysis" style="margin-left:auto">停止</button>
+      </div>
+      <div class="job-log" id="analysis-log"></div>
+    </div>
+
+    <!-- Path result -->
+    <div id="path-result" style="display:none">
+      <div class="section-title" id="path-result-title">关联路径</div>
+      <div class="path-chain" id="path-chain-view"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-ghost btn-sm" id="btn-highlight-path" style="flex:1">在图中高亮</button>
+        <button class="btn btn-ghost btn-sm" id="btn-add-path-to-graph" style="flex:1">保存到图谱</button>
+      </div>
+    </div>
+
+    <!-- Batch result summary -->
+    <div id="batch-result" style="display:none">
+      <div class="section-title" id="batch-result-title">分析结果</div>
+      <div id="batch-result-body"></div>
+      <button class="btn btn-primary btn-sm" id="btn-load-batch-graph" style="width:100%;margin-top:8px">载入图谱并刷新</button>
+    </div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div class="tab-panel" id="tab-settings">
+    <div class="section-title">区块链 API 密钥</div>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+      无密钥时使用公共接口（限速）。推荐申请免费 API Key 以提升速度。
+    </p>
+    <div class="form-group">
+      <label>Etherscan API Key（ETH/ARB/OP）</label>
+      <input type="text" id="cfg-eth-key" placeholder="留空使用公共接口">
+    </div>
+    <div class="form-group">
+      <label>BscScan API Key（BSC）</label>
+      <input type="text" id="cfg-bsc-key" placeholder="留空使用公共接口">
+    </div>
+    <div class="form-group">
+      <label>PolygonScan API Key（MATIC）</label>
+      <input type="text" id="cfg-matic-key" placeholder="留空使用公共接口">
+    </div>
+    <div class="form-group">
+      <label>TronGrid API Key（TRON）</label>
+      <input type="text" id="cfg-tron-key" placeholder="留空使用公共接口">
+    </div>
+    <button class="btn btn-primary" id="btn-save-config" style="width:100%">保存密钥</button>
+    <p style="font-size:10px;color:var(--text-muted);margin-top:6px">
+      密钥保存在本地 config.json，不会上传。
+    </p>
   </div>
 
   <!-- Add Relationship Tab -->
@@ -1001,7 +1201,7 @@ document.getElementById('search-input').addEventListener('input', async (e) => {
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('#sidebar .tabs > .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'add-rel') loadRels();
 }
@@ -1019,6 +1219,281 @@ function toast(msg, type = 'success') {
   el.className = `show ${type}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.className = '', 2800);
+}
+
+// ─── Analysis Tab ─────────────────────────────────────────────────────────────
+
+let currentJobId = null;
+let jobPollTimer = null;
+let currentPathData = null;
+let currentBatchData = null;
+
+function switchMode(mode) {
+  document.getElementById('mode-path').style.display = mode === 'path' ? '' : 'none';
+  document.getElementById('mode-batch').style.display = mode === 'batch' ? '' : 'none';
+  document.getElementById('mode-path-tab').classList.toggle('active', mode === 'path');
+  document.getElementById('mode-batch-tab').classList.toggle('active', mode === 'batch');
+}
+
+function showJobStatus(show) {
+  document.getElementById('analysis-status').style.display = show ? '' : 'none';
+  if (!show) {
+    document.getElementById('analysis-spinner').style.display = '';
+  }
+}
+
+function appendLog(msg, type = '') {
+  const log = document.getElementById('analysis-log');
+  const line = document.createElement('div');
+  line.className = `log-line ${type ? 'log-' + type : ''}`;
+  line.textContent = '› ' + msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('analysis-log').innerHTML = '';
+}
+
+function startPolling(jobId, onDone) {
+  currentJobId = jobId;
+  let lastProgressLen = 0;
+  jobPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`${API}/api/jobs/${jobId}`);
+      const job = await res.json();
+      // Append new progress lines
+      const lines = job.progress || [];
+      for (let i = lastProgressLen; i < lines.length; i++) {
+        appendLog(lines[i]);
+      }
+      lastProgressLen = lines.length;
+      document.getElementById('analysis-status-text').textContent =
+        lines[lines.length - 1] || '运行中…';
+
+      if (job.status === 'done' || job.status === 'error') {
+        clearInterval(jobPollTimer);
+        jobPollTimer = null;
+        document.getElementById('analysis-spinner').style.display = 'none';
+        if (job.status === 'error') {
+          appendLog('错误: ' + job.error, 'err');
+          document.getElementById('analysis-status-text').textContent = '分析失败';
+        } else {
+          appendLog('完成', 'ok');
+          document.getElementById('analysis-status-text').textContent = '完成';
+          onDone(job.result);
+        }
+      }
+    } catch (e) {
+      appendLog('轮询失败: ' + e.message, 'err');
+    }
+  }, 1000);
+}
+
+// Path finding
+document.getElementById('btn-find-path').addEventListener('click', async () => {
+  const addrA = document.getElementById('path-addr-a').value.trim();
+  const addrB = document.getElementById('path-addr-b').value.trim();
+  const chain = document.getElementById('path-chain').value;
+  const depth = document.getElementById('path-depth').value;
+
+  if (!addrA || !addrB) { toast('请填写两个地址', 'error'); return; }
+
+  clearLog();
+  showJobStatus(true);
+  document.getElementById('path-result').style.display = 'none';
+
+  const res = await fetch(`${API}/api/find-path`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addr_a: addrA, addr_b: addrB, chain, max_depth: parseInt(depth) })
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.error || '请求失败', 'error'); return; }
+
+  startPolling(data.job_id, (result) => {
+    currentPathData = result;
+    renderPathResult(result, addrA, addrB);
+    loadPersons();
+    loadGraph();
+  });
+});
+
+function renderPathResult(result, addrA, addrB) {
+  const el = document.getElementById('path-result');
+  const title = document.getElementById('path-result-title');
+  const view = document.getElementById('path-chain-view');
+
+  if (!result.found || !result.path) {
+    title.textContent = '未找到关联路径';
+    view.innerHTML = '<div class="empty" style="color:var(--danger)">在指定跳数内未发现交易路径，可尝试增加跳数或检查地址</div>';
+    el.style.display = '';
+    return;
+  }
+
+  const path = result.path;
+  const hops = path.length - 1;
+  title.textContent = `发现路径（${hops} 跳）`;
+
+  view.innerHTML = path.map((hop, i) => {
+    const isFirst = i === 0;
+    const isLast = i === path.length - 1;
+    const addrShort = hop.address.length > 20
+      ? hop.address.slice(0, 10) + '…' + hop.address.slice(-8)
+      : hop.address;
+    const label = isFirst ? '起点' : isLast ? '终点' : `中间 ${i}`;
+    const nodeClass = (isFirst || isLast) ? 'path-node highlight' : 'path-node';
+
+    let arrow = '';
+    if (!isFirst) {
+      const val = hop.value && hop.value !== '0' ? `${hop.value}` : '';
+      const txShort = hop.tx_hash ? hop.tx_hash.slice(0, 10) + '…' : '';
+      arrow = `<div class="path-arrow">
+        <div class="arrow-line"></div>
+        <span>${txShort}</span>
+        ${val ? `<span class="tx-val">${val}</span>` : ''}
+        <div class="arrow-line"></div>
+        ▼
+      </div>`;
+    }
+
+    return `${arrow}<div class="${nodeClass}">
+      <span class="node-label">${label}</span>
+      <span class="node-addr" title="${hop.address}">${addrShort}</span>
+      ${hop.tx_hash ? `<a href="javascript:void(0)" onclick="copyText('${hop.tx_hash}')" style="color:var(--accent2);font-size:9px">复制TX</a>` : ''}
+    </div>`;
+  }).join('');
+
+  el.style.display = '';
+}
+
+document.getElementById('btn-highlight-path').addEventListener('click', () => {
+  if (!currentPathData || !currentPathData.path) return;
+  highlightPath(currentPathData.path);
+});
+
+document.getElementById('btn-add-path-to-graph').addEventListener('click', async () => {
+  toast('节点已在分析时自动保存', 'success');
+  await Promise.all([loadPersons(), loadGraph()]);
+});
+
+function highlightPath(path) {
+  // Reset all highlights
+  cy.elements().removeClass('path-highlight');
+  cy.nodes().style({ 'border-color': '#2d3148', 'border-width': '2px' });
+  cy.edges().style({ 'opacity': 0.7 });
+
+  const addrs = path.map(h => h.address.toLowerCase());
+
+  // Highlight matching nodes
+  cy.nodes().forEach(node => {
+    // We match by looking up address mapping (stored in label or we search persons)
+    const nodeId = node.id();
+    if (addrs.some(a => node.data('label').toLowerCase().includes(a.slice(0, 8)))) {
+      node.style({ 'border-color': '#f39c12', 'border-width': '3px' });
+    }
+  });
+
+  // Flash
+  toast('已高亮路径节点（橙色边框）', 'success');
+}
+
+// Batch analysis
+document.getElementById('btn-batch-analyze').addEventListener('click', async () => {
+  const raw = document.getElementById('batch-addrs').value.trim();
+  const addresses = raw.split('\n').map(s => s.trim()).filter(Boolean);
+  const chain = document.getElementById('batch-chain').value;
+
+  if (addresses.length < 1) { toast('请输入至少1个地址', 'error'); return; }
+  if (addresses.length > 10) { toast('最多10个地址', 'error'); return; }
+
+  clearLog();
+  showJobStatus(true);
+  document.getElementById('batch-result').style.display = 'none';
+
+  const res = await fetch(`${API}/api/analyze-addresses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addresses, chain })
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.error || '请求失败', 'error'); return; }
+
+  startPolling(data.job_id, (result) => {
+    currentBatchData = result;
+    renderBatchResult(result, addresses);
+    loadPersons();
+    loadGraph();
+  });
+});
+
+function renderBatchResult(result, inputAddrs) {
+  const el = document.getElementById('batch-result');
+  const title = document.getElementById('batch-result-title');
+  const body = document.getElementById('batch-result-body');
+
+  const nodeCount = result.nodes ? result.nodes.length : 0;
+  const edgeCount = result.edges ? result.edges.length : 0;
+  const pathCount = result.paths ? Object.keys(result.paths).length : 0;
+
+  title.textContent = `发现 ${nodeCount} 个节点，${edgeCount} 条交易`;
+
+  let html = `<div class="info-row"><span class="info-key">输入地址</span><span class="info-val">${inputAddrs.length} 个</span></div>
+    <div class="info-row"><span class="info-key">关联地址</span><span class="info-val">${nodeCount} 个</span></div>
+    <div class="info-row"><span class="info-key">交易边</span><span class="info-val">${edgeCount} 条</span></div>
+    <div class="info-row"><span class="info-key">直接关联对</span><span class="info-val">${pathCount} 对</span></div>`;
+
+  if (pathCount > 0) {
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--ok)">✓ 发现直接关联：</div>';
+    for (const [key, path] of Object.entries(result.paths || {})) {
+      const [a, b] = key.split(':');
+      html += `<div class="rel-item" style="font-size:10px;font-family:monospace">
+        ${a.slice(0,8)}… ↔ ${b.slice(0,8)}…
+        <span style="color:var(--ok);font-size:9px">直接交易</span>
+      </div>`;
+    }
+  }
+
+  body.innerHTML = html;
+  el.style.display = '';
+}
+
+document.getElementById('btn-load-batch-graph').addEventListener('click', async () => {
+  await Promise.all([loadPersons(), loadGraph()]);
+  toast('已刷新图谱', 'success');
+  switchTab('persons');
+});
+
+document.getElementById('btn-stop-analysis').addEventListener('click', () => {
+  if (jobPollTimer) {
+    clearInterval(jobPollTimer);
+    jobPollTimer = null;
+    appendLog('已手动停止', 'err');
+    document.getElementById('analysis-spinner').style.display = 'none';
+    document.getElementById('analysis-status-text').textContent = '已停止';
+  }
+});
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-save-config').addEventListener('click', async () => {
+  const cfg = {
+    ETH_KEY:  document.getElementById('cfg-eth-key').value.trim() || null,
+    BSC_KEY:  document.getElementById('cfg-bsc-key').value.trim() || null,
+    MATIC_KEY: document.getElementById('cfg-matic-key').value.trim() || null,
+    TRON_KEY: document.getElementById('cfg-tron-key').value.trim() || null,
+  };
+  const res = await fetch(`${API}/api/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg)
+  });
+  if (res.ok) toast('密钥已保存', 'success');
+  else toast('保存失败', 'error');
+});
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => toast('已复制', 'success'));
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
