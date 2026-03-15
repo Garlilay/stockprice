@@ -673,9 +673,18 @@
       <label>TronGrid API Key（TRON）</label>
       <input type="text" id="cfg-tron-key" placeholder="留空使用公共接口">
     </div>
+    <div class="divider"></div>
+    <div class="section-title" style="margin-bottom:6px">Arkham Intelligence</div>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+      用于地址标签查询和智能剪枝。申请地址：<span style="color:var(--accent2)">arkhamintelligence.com/api</span>
+    </p>
+    <div class="form-group">
+      <label>Arkham API Key</label>
+      <input type="text" id="cfg-arkham-key" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    </div>
     <button class="btn btn-primary" id="btn-save-config" style="width:100%">保存密钥</button>
     <p style="font-size:10px;color:var(--text-muted);margin-top:6px">
-      密钥保存在本地 config.json，不会上传。
+      密钥保存在本地 config.json，不会上传。未配置 Arkham Key 时，BFS 不进行剪枝（速度较慢）。
     </p>
   </div>
 
@@ -831,14 +840,16 @@ function initCy() {
         selector: 'node',
         style: {
           'background-color': 'data(color)',
-          'label': 'data(label)',
+          'label': 'data(displayLabel)',
           'color': '#e2e4f0',
-          'font-size': '11px',
+          'font-size': '10px',
           'font-family': 'SF Pro Display, PingFang SC, system-ui, sans-serif',
           'text-valign': 'bottom',
           'text-margin-y': '4px',
           'text-outline-color': '#0f1117',
           'text-outline-width': '2px',
+          'text-wrap': 'wrap',
+          'text-max-width': '80px',
           'width': '36px',
           'height': '36px',
           'border-width': '2px',
@@ -901,9 +912,12 @@ async function loadGraph() {
 
   cy.elements().remove();
 
-  const nodes = data.nodes.map(n => ({
-    data: { ...n.data, edgeColor: '#2d3148' }
-  }));
+  const nodes = data.nodes.map(n => {
+    const d = n.data;
+    // Show Arkham label as secondary line if available
+    const arkhamLine = d.arkham_label ? `\n${d.arkham_label}` : '';
+    return { data: { ...d, edgeColor: '#2d3148', displayLabel: d.label + arkhamLine } };
+  });
 
   const edges = data.edges.map(e => ({
     data: {
@@ -1333,7 +1347,11 @@ function renderPathResult(result, addrA, addrB) {
 
   const path = result.path;
   const hops = path.length - 1;
-  title.textContent = `发现路径（${hops} 跳）`;
+  const stats = result.stats || {};
+  const filterRate = stats.filter_rate != null
+    ? `（Arkham 过滤率 ${(stats.filter_rate * 100).toFixed(0)}%，探索 ${stats.explored} 个节点）`
+    : '';
+  title.textContent = `发现路径（${hops} 跳）${filterRate}`;
 
   view.innerHTML = path.map((hop, i) => {
     const isFirst = i === 0;
@@ -1341,26 +1359,37 @@ function renderPathResult(result, addrA, addrB) {
     const addrShort = hop.address.length > 20
       ? hop.address.slice(0, 10) + '…' + hop.address.slice(-8)
       : hop.address;
-    const label = isFirst ? '起点' : isLast ? '终点' : `中间 ${i}`;
+    const posLabel = isFirst ? '起点' : isLast ? '终点' : `中间 ${i}`;
     const nodeClass = (isFirst || isLast) ? 'path-node highlight' : 'path-node';
+
+    // Arkham label badges
+    const arkham = hop.arkham || {};
+    const arkhamLabel = arkham.label || arkham.entity || '';
+    const isMixer = arkham.is_mixer;
+    const isDeposit = arkham.is_cex_deposit;
+    let badge = '';
+    if (arkhamLabel) {
+      const color = isMixer ? 'var(--danger)' : isDeposit ? 'var(--warn)' : 'var(--accent2)';
+      badge = `<span style="padding:1px 5px;border-radius:3px;font-size:9px;background:${color}22;color:${color};max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${arkhamLabel}">${arkhamLabel}</span>`;
+    }
 
     let arrow = '';
     if (!isFirst) {
-      const val = hop.value && hop.value !== '0' ? `${hop.value}` : '';
+      const val = hop.value && hop.value !== '0' && hop.value !== '0.000000' ? hop.value : '';
       const txShort = hop.tx_hash ? hop.tx_hash.slice(0, 10) + '…' : '';
       arrow = `<div class="path-arrow">
         <div class="arrow-line"></div>
         <span>${txShort}</span>
         ${val ? `<span class="tx-val">${val}</span>` : ''}
-        <div class="arrow-line"></div>
-        ▼
+        <div class="arrow-line"></div>▼
       </div>`;
     }
 
     return `${arrow}<div class="${nodeClass}">
-      <span class="node-label">${label}</span>
+      <span class="node-label">${posLabel}</span>
       <span class="node-addr" title="${hop.address}">${addrShort}</span>
-      ${hop.tx_hash ? `<a href="javascript:void(0)" onclick="copyText('${hop.tx_hash}')" style="color:var(--accent2);font-size:9px">复制TX</a>` : ''}
+      ${badge}
+      ${hop.tx_hash ? `<a href="javascript:void(0)" onclick="copyText('${hop.tx_hash}')" style="color:var(--accent2);font-size:9px;flex-shrink:0">TX</a>` : ''}
     </div>`;
   }).join('');
 
@@ -1435,12 +1464,21 @@ function renderBatchResult(result, inputAddrs) {
   const nodeCount = result.nodes ? result.nodes.length : 0;
   const edgeCount = result.edges ? result.edges.length : 0;
   const pathCount = result.paths ? Object.keys(result.paths).length : 0;
+  const stats = result.stats || {};
+  const filterRate = stats.filter_rate != null
+    ? `${(stats.filter_rate * 100).toFixed(0)}%` : '—';
 
-  title.textContent = `发现 ${nodeCount} 个节点，${edgeCount} 条交易`;
+  title.textContent = `发现 ${nodeCount} 个节点，${edgeCount} 条有效交易`;
 
-  let html = `<div class="info-row"><span class="info-key">输入地址</span><span class="info-val">${inputAddrs.length} 个</span></div>
-    <div class="info-row"><span class="info-key">关联地址</span><span class="info-val">${nodeCount} 个</span></div>
+  let html = `
+    <div class="info-row"><span class="info-key">输入地址</span><span class="info-val">${inputAddrs.length} 个</span></div>
+    <div class="info-row"><span class="info-key">保留节点</span><span class="info-val">${nodeCount} 个</span></div>
     <div class="info-row"><span class="info-key">交易边</span><span class="info-val">${edgeCount} 条</span></div>
+    <div class="info-row"><span class="info-key">Arkham 过滤率</span>
+      <span class="info-val" style="color:var(--ok)">${filterRate}
+        ${stats.filtered != null ? `（过滤 ${stats.filtered}/${stats.total_neighbors} 个）` : ''}
+      </span>
+    </div>
     <div class="info-row"><span class="info-key">直接关联对</span><span class="info-val">${pathCount} 对</span></div>`;
 
   if (pathCount > 0) {
@@ -1451,6 +1489,23 @@ function renderBatchResult(result, inputAddrs) {
         ${a.slice(0,8)}… ↔ ${b.slice(0,8)}…
         <span style="color:var(--ok);font-size:9px">直接交易</span>
       </div>`;
+    }
+  }
+
+  // Show labeled nodes found
+  const labeledNodes = (result.nodes || []).filter(n => n.label || n.entity);
+  if (labeledNodes.length > 0) {
+    html += `<div style="margin-top:8px;font-size:11px;color:var(--text-muted)">已识别实体（${labeledNodes.length} 个）：</div>`;
+    labeledNodes.slice(0, 6).forEach(n => {
+      const color = n.is_mixer ? 'var(--danger)' : n.is_cex_deposit ? 'var(--warn)' : 'var(--accent2)';
+      html += `<div class="addr-tag" style="margin-top:4px">
+        <span style="color:${color};font-size:9px;flex-shrink:0">${n.entity_type || '?'}</span>
+        <span class="addr-text">${n.label || n.entity}</span>
+        <span style="color:var(--text-muted);font-size:9px">${n.address.slice(0,8)}…</span>
+      </div>`;
+    });
+    if (labeledNodes.length > 6) {
+      html += `<div class="empty">还有 ${labeledNodes.length - 6} 个已识别节点</div>`;
     }
   }
 
@@ -1478,10 +1533,11 @@ document.getElementById('btn-stop-analysis').addEventListener('click', () => {
 
 document.getElementById('btn-save-config').addEventListener('click', async () => {
   const cfg = {
-    ETH_KEY:  document.getElementById('cfg-eth-key').value.trim() || null,
-    BSC_KEY:  document.getElementById('cfg-bsc-key').value.trim() || null,
-    MATIC_KEY: document.getElementById('cfg-matic-key').value.trim() || null,
-    TRON_KEY: document.getElementById('cfg-tron-key').value.trim() || null,
+    ETH_KEY:    document.getElementById('cfg-eth-key').value.trim() || null,
+    BSC_KEY:    document.getElementById('cfg-bsc-key').value.trim() || null,
+    MATIC_KEY:  document.getElementById('cfg-matic-key').value.trim() || null,
+    TRON_KEY:   document.getElementById('cfg-tron-key').value.trim() || null,
+    ARKHAM_KEY: document.getElementById('cfg-arkham-key').value.trim() || null,
   };
   const res = await fetch(`${API}/api/config`, {
     method: 'POST',

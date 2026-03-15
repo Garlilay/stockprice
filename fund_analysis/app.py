@@ -108,6 +108,18 @@ def init_db():
                 notes TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS arkham_cache (
+                address TEXT PRIMARY KEY,
+                entity_name TEXT,
+                entity_type TEXT,
+                label TEXT,
+                skip INTEGER DEFAULT 0,
+                skip_reason TEXT,
+                is_mixer INTEGER DEFAULT 0,
+                is_cex_deposit INTEGER DEFAULT 0,
+                fetched_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         db.commit()
         print("Database initialized successfully.")
@@ -283,6 +295,20 @@ def get_graph():
         addr_count = db.execute(
             "SELECT COUNT(*) as cnt FROM addresses WHERE person_id = ?", (p['id'],)
         ).fetchone()['cnt']
+        # Try to get Arkham label for first address of this person
+        first_addr = db.execute(
+            "SELECT address FROM addresses WHERE person_id = ? LIMIT 1", (p['id'],)
+        ).fetchone()
+        arkham_label = ''
+        arkham_entity_type = ''
+        if first_addr:
+            cached = db.execute(
+                "SELECT label, entity_type, is_mixer, is_cex_deposit FROM arkham_cache WHERE address = ?",
+                (first_addr['address'].lower(),)
+            ).fetchone()
+            if cached:
+                arkham_label = cached['label'] or ''
+                arkham_entity_type = cached['entity_type'] or ''
         nodes.append({
             'data': {
                 'id': str(p['id']),
@@ -291,6 +317,8 @@ def get_graph():
                 'organization': p['organization'] or '',
                 'risk_level': p['risk_level'] or 'unknown',
                 'addr_count': addr_count,
+                'arkham_label': arkham_label,
+                'arkham_entity_type': arkham_entity_type,
                 'color': risk_colors.get(p['risk_level'], '#95a5a6')
             }
         })
@@ -384,7 +412,6 @@ def index():
 @app.route('/api/config', methods=['GET'])
 def get_config():
     cfg = load_config()
-    # Mask keys for display
     masked = {k: (v[:4] + '…' + v[-4:] if len(v) > 8 else '****')
               for k, v in cfg.items() if v}
     return jsonify(masked)
@@ -397,6 +424,30 @@ def set_config():
     cfg.update({k: v for k, v in data.items() if v is not None})
     save_config(cfg)
     return jsonify({'message': 'Config saved'})
+
+
+@app.route('/api/arkham/label', methods=['GET'])
+def arkham_label():
+    """Look up Arkham label for an address (uses cache, then live API)."""
+    from arkham import get_label_with_cache
+    address = request.args.get('address', '').strip().lower()
+    if not address:
+        return jsonify({'error': 'address required'}), 400
+    cfg = load_config()
+    arkham_key = cfg.get('ARKHAM_KEY') or ''
+    db = get_db()
+    result = get_label_with_cache(address, arkham_key, db)
+    return jsonify(result)
+
+
+@app.route('/api/arkham/cache', methods=['GET'])
+def arkham_cache_list():
+    """Return cached Arkham labels (for debugging/review)."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM arkham_cache ORDER BY fetched_at DESC LIMIT 200"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 # ─── Background Job Helpers ───────────────────────────────────────────────────
@@ -451,45 +502,58 @@ def api_find_path():
         return jsonify({'error': 'addr_a and addr_b are required'}), 400
 
     cfg = load_config()
-    api_key = data.get('api_key') or cfg.get(f'{chain}_KEY') or cfg.get('ETH_KEY') or ''
+    chain_key = data.get('api_key') or cfg.get(f'{chain}_KEY') or cfg.get('ETH_KEY') or ''
+    arkham_key = cfg.get('ARKHAM_KEY') or ''
 
     jid = _new_job()
 
     def run():
         try:
-            path = find_path(
-                addr_a, addr_b, chain, api_key, max_depth,
-                progress_cb=lambda m: _job_progress(jid, m)
+            result = find_path(
+                addr_a, addr_b, chain,
+                chain_api_key=chain_key,
+                arkham_api_key=arkham_key,
+                db_path=DATABASE,
+                max_depth=max_depth,
+                progress_cb=lambda m: _job_progress(jid, m),
             )
+            path = result['path'] if result else None
             if path:
-                # Auto-create person nodes for intermediate addresses
-                with app.app_context():
-                    db = sqlite3.connect(DATABASE)
-                    db.row_factory = sqlite3.Row
-                    db.execute("PRAGMA foreign_keys = ON")
-                    for hop in path:
-                        addr = hop['address']
-                        # Check if address already exists
-                        existing = db.execute(
-                            "SELECT person_id FROM addresses WHERE address=? COLLATE NOCASE", (addr,)
-                        ).fetchone()
-                        if not existing:
-                            # Create anonymous person node
-                            cur = db.execute(
-                                "INSERT INTO persons (name, role, tags, risk_level) VALUES (?,?,?,?)",
-                                (f"{addr[:8]}…{addr[-6:]}", '未知地址', 'auto-discovered', 'unknown')
+                db = sqlite3.connect(DATABASE)
+                db.row_factory = sqlite3.Row
+                db.execute("PRAGMA foreign_keys = ON")
+                for hop in path:
+                    addr = hop['address']
+                    existing = db.execute(
+                        "SELECT person_id FROM addresses WHERE address=? COLLATE NOCASE", (addr,)
+                    ).fetchone()
+                    if not existing:
+                        arkham = hop.get('arkham') or {}
+                        label_str = arkham.get('label') or ''
+                        name = label_str or f"{addr[:8]}…{addr[-6:]}"
+                        tags = 'auto-discovered'
+                        if arkham.get('is_mixer'):   tags += ',mixer'
+                        if arkham.get('is_cex_deposit'): tags += ',cex-deposit'
+                        cur = db.execute(
+                            "INSERT INTO persons (name, role, organization, tags, risk_level) VALUES (?,?,?,?,?)",
+                            (name, arkham.get('entity_type') or '未知地址',
+                             arkham.get('entity') or '', tags, 'unknown')
+                        )
+                        pid = cur.lastrowid
+                        try:
+                            db.execute(
+                                "INSERT INTO addresses (person_id, chain, address, label) VALUES (?,?,?,?)",
+                                (pid, chain, addr, label_str or '自动发现')
                             )
-                            pid = cur.lastrowid
-                            try:
-                                db.execute(
-                                    "INSERT INTO addresses (person_id, chain, address, label) VALUES (?,?,?,?)",
-                                    (pid, chain, addr, '自动发现')
-                                )
-                            except Exception:
-                                pass
-                    db.commit()
-                    db.close()
-            _job_done(jid, {'path': path, 'found': path is not None})
+                        except Exception:
+                            pass
+                db.commit()
+                db.close()
+            _job_done(jid, {
+                'path': path,
+                'found': path is not None,
+                'stats': result['stats'] if result else {}
+            })
         except Exception as e:
             _job_error(jid, str(e))
 
@@ -511,41 +575,52 @@ def api_analyze_addresses():
         return jsonify({'error': 'Max 10 addresses at once'}), 400
 
     cfg = load_config()
-    api_key = data.get('api_key') or cfg.get(f'{chain}_KEY') or cfg.get('ETH_KEY') or ''
+    chain_key = data.get('api_key') or cfg.get(f'{chain}_KEY') or cfg.get('ETH_KEY') or ''
+    arkham_key = cfg.get('ARKHAM_KEY') or ''
 
     jid = _new_job()
 
     def run():
         try:
             result = analyze_addresses(
-                addresses, chain, api_key,
-                progress_cb=lambda m: _job_progress(jid, m)
+                addresses, chain,
+                chain_api_key=chain_key,
+                arkham_api_key=arkham_key,
+                db_path=DATABASE,
+                progress_cb=lambda m: _job_progress(jid, m),
             )
-            # Auto-create person nodes for all input addresses
-            with app.app_context():
-                db = sqlite3.connect(DATABASE)
-                db.row_factory = sqlite3.Row
-                db.execute("PRAGMA foreign_keys = ON")
-                for addr in addresses:
-                    addr = addr.strip().lower()
-                    existing = db.execute(
-                        "SELECT person_id FROM addresses WHERE address=? COLLATE NOCASE", (addr,)
-                    ).fetchone()
-                    if not existing:
-                        cur = db.execute(
-                            "INSERT INTO persons (name, role, tags, risk_level) VALUES (?,?,?,?)",
-                            (f"{addr[:8]}…{addr[-6:]}", '待分析地址', 'auto-discovered', 'unknown')
+            # Auto-create person nodes for input addresses (with Arkham labels)
+            db = sqlite3.connect(DATABASE)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys = ON")
+            for node in result.get('nodes', []):
+                if not node.get('is_input'):
+                    continue
+                addr = node['address']
+                existing = db.execute(
+                    "SELECT person_id FROM addresses WHERE address=? COLLATE NOCASE", (addr,)
+                ).fetchone()
+                if not existing:
+                    label_str = node.get('label') or ''
+                    name = label_str or f"{addr[:8]}…{addr[-6:]}"
+                    tags = 'auto-discovered'
+                    if node.get('is_mixer'):      tags += ',mixer'
+                    if node.get('is_cex_deposit'): tags += ',cex-deposit'
+                    cur = db.execute(
+                        "INSERT INTO persons (name, role, organization, tags, risk_level) VALUES (?,?,?,?,?)",
+                        (name, node.get('entity_type') or '待分析地址',
+                         node.get('entity') or '', tags, 'unknown')
+                    )
+                    pid = cur.lastrowid
+                    try:
+                        db.execute(
+                            "INSERT INTO addresses (person_id, chain, address, label) VALUES (?,?,?,?)",
+                            (pid, chain, addr, label_str or '输入地址')
                         )
-                        pid = cur.lastrowid
-                        try:
-                            db.execute(
-                                "INSERT INTO addresses (person_id, chain, address, label) VALUES (?,?,?,?)",
-                                (pid, chain, addr, '输入地址')
-                            )
-                        except Exception:
-                            pass
-                db.commit()
-                db.close()
+                    except Exception:
+                        pass
+            db.commit()
+            db.close()
             _job_done(jid, result)
         except Exception as e:
             _job_error(jid, str(e))
